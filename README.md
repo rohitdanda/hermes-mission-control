@@ -11,7 +11,7 @@ Read-only. Everything stays on your machine.
 ## Quick start
 
 ```bash
-hermes plugins install rohitkumardanda/hermes-mission-control --enable
+hermes plugins install rohitdanda/hermes-mission-control --enable
 ```
 
 1. Restart the gateway: **⌘K → Restart gateway** (the hooks load at gateway start).
