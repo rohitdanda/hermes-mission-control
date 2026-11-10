@@ -807,7 +807,7 @@ function Dashboard({ store, wide }) {
   const ready = conn.state === 'ok' || conn.state === 'error'
   const main = [jsx(NowCard, { key: 'now', store }), jsx(Subagents, { key: 'subs', store })]
   const side = [jsx(Today, { key: 'today', store }), jsx(Feed, { key: 'feed', store })]
-  return div({ ...S.root, ...(wide ? { padding: '16px 20px', maxWidth: 1100, margin: '0 auto', width: '100%' } : null) }, [
+  const body = [
     jsx(Header, { key: 'h', store }),
     jsx(Notice, { key: 'n', store }),
     ready
@@ -815,7 +815,15 @@ function Dashboard({ store, wide }) {
         ? div({ display: 'grid', gridTemplateColumns: 'minmax(0, 1.3fr) minmax(0, 1fr)', gap: 12, alignItems: 'start' }, [div({ display: 'flex', flexDirection: 'column', gap: 10 }, main, { key: 'a' }), div({ display: 'flex', flexDirection: 'column', gap: 10 }, side, { key: 'b' })], { key: 'grid' })
         : div({ display: 'flex', flexDirection: 'column', gap: 10 }, [...main, ...side], { key: 'stack' })
       : null
-  ])
+  ]
+  if (!wide) return div(S.root, body)
+  // A full page paints its own surface and owns its scroll, like core pages do
+  // (Kanban's page root: relative flex h-full flex-col overflow-hidden + surface bg);
+  // otherwise whatever the workspace showed before stays visible underneath.
+  return div(
+    { position: 'relative', display: 'flex', flexDirection: 'column', height: '100%', width: '100%', minWidth: 0, minHeight: 0, overflow: 'hidden', background: 'var(--ui-surface-background, var(--ui-bg-editor))' },
+    div({ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }, div({ ...S.root, height: 'auto', overflowY: 'visible', padding: '16px 20px', maxWidth: 1100, margin: '0 auto', width: '100%', boxSizing: 'border-box' }, body))
+  )
 }
 
 function Chip({ store }) {
