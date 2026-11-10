@@ -817,12 +817,15 @@ function Dashboard({ store, wide }) {
       : null
   ]
   if (!wide) return div(S.root, body)
-  // A full page paints its own surface and owns its scroll, like core pages do
-  // (Kanban's page root: relative flex h-full flex-col overflow-hidden + surface bg);
-  // otherwise whatever the workspace showed before stays visible underneath.
+  // A full page owns its box, like core pages (PageSearchShell): it paints the
+  // chat surface, scrolls itself, clears the titlebar that overlays the
+  // workspace top, and uses the app's page insets (PAGE_INSET_X / PAGE_MAX_W).
   return div(
-    { position: 'relative', display: 'flex', flexDirection: 'column', height: '100%', width: '100%', minWidth: 0, minHeight: 0, overflow: 'hidden', background: 'var(--ui-surface-background, var(--ui-bg-editor))' },
-    div({ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }, div({ ...S.root, height: 'auto', overflowY: 'visible', padding: '16px 20px', maxWidth: 1100, margin: '0 auto', width: '100%', boxSizing: 'border-box' }, body))
+    { position: 'relative', display: 'flex', flexDirection: 'column', height: '100%', width: '100%', minWidth: 0, minHeight: 0, overflow: 'hidden', background: 'var(--ui-chat-surface-background, var(--ui-surface-background))' },
+    div(
+      { flex: 1, minHeight: 0, minWidth: 0, overflowY: 'auto', overflowX: 'hidden' },
+      div({ ...S.root, height: 'auto', overflowY: 'visible', boxSizing: 'border-box', width: '100%', maxWidth: '75rem', margin: '0 auto', padding: 'calc(var(--titlebar-height, 0px) + 1rem) clamp(1.25rem, 4vw, 4rem) 2rem' }, body)
+    )
   )
 }
 

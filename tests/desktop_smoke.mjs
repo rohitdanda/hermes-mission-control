@@ -150,7 +150,8 @@ check(render(byId.pane, 'pane after dup') === before, 'duplicate seq is ignored'
 
 const page = render(byId.page, 'page')
 check(page.includes('Mission Control') || page.includes('Today'), 'page renders')
-check(/^<div style="position:relative;display:flex;flex-direction:column;height:100%;width:100%[^"]*background:var\(--ui-surface-background/.test(page), 'full page paints its own surface (chat must not show through)')
+check(/^<div style="position:relative;display:flex;flex-direction:column;height:100%;width:100%[^"]*background:var\(--ui-chat-surface-background/.test(page), 'full page paints the chat surface like core pages (nothing shows through)')
+check(page.includes('var(--titlebar-height, 0px)'), 'full page clears the titlebar overlay')
 check(!/^<div style="position:relative/.test(pane), 'pane keeps the app background (no own surface)')
 const chip = render(byId.chip, 'chip')
 check(/k|M/.test(chip) && chip.includes('$'), 'chip shows tokens and cost')
