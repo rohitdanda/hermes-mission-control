@@ -6,6 +6,8 @@ copies, regardless of which one the loader imports first. Every callback
 is fail-open: it never raises into the agent loop.
 """
 
+import hashlib
+import json
 import re
 import sys
 import threading
@@ -32,7 +34,7 @@ def _today_str():
 def _fresh_daily():
     d = {"date": _today_str(), "turns": 0, "tool_calls": 0, "errors": 0,
          "api_retries": 0, "approvals": 0, "approvals_denied": 0,
-         "approvals_unanswered": 0, "est_cost": 0.0, "unpriced_calls": 0}
+         "approvals_unanswered": 0, "est_cost": 0.0, "unpriced_calls": 0, "loops": 0}
     d.update({k: 0 for k in _BUCKETS})
     return d
 
@@ -46,6 +48,7 @@ def _init_state():
         "inflight": {},        # tool_call_id -> {tool, turn_id, started_at}
         "child_sessions": {},  # subagent child_session_id -> parent turn_id
         "turn_parent": {},     # subagent turn_id -> parent turn_id
+        "streaks": {},         # agent session -> {sig, tool, count, alerted}
         "daily": _fresh_daily(),
         "seq": 0,
     }
@@ -116,7 +119,8 @@ def _remember_turn(turn_id, started_at=None, parent=None):
         t = {"started_at": started_at or now, "ended_at": now, "tool_calls": 0,
              "api_calls": 0, "est_cost": 0.0, "priced": None, "model": None,
              "provider": None, "session_id": None, "last_api_duration": None,
-             "subagent": bool(parent), "parent": parent}
+             "subagent": bool(parent), "parent": parent,
+             "loop_tool": None, "loop_max": 0}
         t.update({k: 0 for k in _BUCKETS})
         STATE["turns"][turn_id] = t
         return turn_id, t
@@ -193,11 +197,54 @@ def on_pre_tool_call(**kw):
         pass
 
 
+_LOOP_FLOOR = 5   # streak that counts as a loop in daily stats / loop.alert
+_LOOP_STATUSES = ("ok", "error")
+
+
+def _args_hash(args):
+    """Short, irreversible fingerprint of a tool call's arguments. Used only
+    to spot identical repeats; the arguments themselves are never stored."""
+    try:
+        raw = json.dumps(args, sort_keys=True, default=str)
+    except Exception:
+        raw = repr(args)
+    return hashlib.sha1(raw.encode("utf-8", "replace")).hexdigest()[:12]
+
+
+def _streak_locked(kw, tool, status, root):
+    """Consecutive identical calls (same tool AND same arguments) by ONE agent.
+    Keyed per session so parallel subagents can't build a fake streak by
+    interleaving; reported against the root turn. Returns (repeat, alert)."""
+    if not tool or status not in _LOOP_STATUSES:
+        return 0, None
+    key = kw.get("session_id") or kw.get("turn_id") or "?"
+    sig = (tool, _args_hash(kw.get("args")))
+    s = STATE["streaks"].get(key)
+    if s is not None and s["sig"] == sig:
+        s["count"] += 1
+    else:
+        s = {"sig": sig, "tool": tool, "count": 1, "alerted": False}
+        _link_locked("streaks", key, s)
+    rt = STATE["turns"].get(root)
+    if rt is not None and s["count"] > (rt.get("loop_max") or 0):
+        rt["loop_max"] = s["count"]
+        rt["loop_tool"] = tool
+    alert = None
+    if s["count"] >= _LOOP_FLOOR and not s["alerted"]:
+        s["alerted"] = True                     # once per streak
+        STATE["daily"]["loops"] = STATE["daily"].get("loops", 0) + 1
+        alert = {"kind": "loop.alert", "turn_id": root, "tool": tool,
+                 "count": s["count"], "session_id": kw.get("session_id")}
+    return s["count"], alert
+
+
 def on_post_tool_call(**kw):
+    alert = None
     try:
         status = kw.get("status") or "ok"
         cid = _cid(kw)
         turn_id = kw.get("turn_id")
+        tool = kw.get("tool_name")
         with STATE["lock"]:
             STATE["inflight"].pop(cid, None)
             root = _root_locked(turn_id)
@@ -209,10 +256,17 @@ def on_post_tool_call(**kw):
             STATE["daily"]["tool_calls"] += 1
             if status == "error":
                 STATE["daily"]["errors"] += 1
-        _record({"kind": "tool.end", "id": cid, "tool": kw.get("tool_name"),
+            repeat, alert = _streak_locked(kw, tool, status, root)
+        _record({"kind": "tool.end", "id": cid, "tool": tool,
                  "status": status, "duration_ms": kw.get("duration_ms"),
                  "error_type": kw.get("error_type"), "turn_id": turn_id,
-                 "root_turn_id": root, "session_id": kw.get("session_id")})
+                 "root_turn_id": root, "session_id": kw.get("session_id"),
+                 "repeat": repeat})
+    except Exception:
+        pass
+    try:
+        if alert:                               # after tool.end, outside the lock
+            _record(alert)
     except Exception:
         pass
 

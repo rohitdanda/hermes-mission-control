@@ -136,7 +136,7 @@ check(pane.includes('search_files'), 'subagent tool shows in the waterfall')
 const elapsed = (pane.match(/>([^<>]+)<\/span><span[^>]*>elapsed</) || [])[1]
 check(elapsed && elapsed !== '0ms', `Now card elapsed should be the turn's real duration (got ${elapsed})`)
 check(state.snapshot.daily.turns === 4, `subagent turns not counted as turns (got ${state.snapshot.daily.turns})`)
-check(state.snapshot.turns[0].tool_calls === 3, `subagent tool rolls into parent (got ${state.snapshot.turns[0].tool_calls})`)
+check(state.snapshot.turns[0].tool_calls === 6, `subagent tool rolls into parent (got ${state.snapshot.turns[0].tool_calls})`)
 check(notifications.some(n => /burn/.test(n.title || '')), 'over-budget toast fired once')
 
 // A pushed event lands immediately and ends the in-flight web_search row.
@@ -169,6 +169,31 @@ plugin.register(ctx2)
 await new Promise(r => setTimeout(r, 20))
 const paneMissing = renderToString(captured.find(c => c.id === 'pane').render())
 check(paneMissing.includes('Backend not loaded'), 'no-backend notice')
+
+// Loop banner follows the user's threshold; the pet speaks once, only when shown.
+const loopPane = async (threshold, petAlerts = true) => {
+  const said = []
+  const got = []
+  const c = {
+    ...ctx,
+    storage: { get: (k, d) => (k === 'prefs' ? { loopThreshold: threshold, petAlerts } : d), set: () => {}, remove: () => {} },
+    pet: { say: (text, opts) => (said.push({ text, opts }), () => {}) },
+    registerMany: cs => got.push(...cs),
+    registerSettingsPage: () => {},
+    onEvent: () => () => {}
+  }
+  plugin.register(c)
+  await new Promise(r => setTimeout(r, 20))
+  return { html: renderToString(got.find(x => x.id === 'pane').render()), said }
+}
+check(!pane.includes('Possible loop'), 'default threshold 5 hides a 3x streak')
+const at3 = await loopPane(3)
+check(at3.html.includes('Possible loop') && at3.html.includes('git_status ×3'), 'threshold 3 shows the 3x streak')
+check(at3.said.length === 1 && /git_status/.test(at3.said[0].text) && at3.said[0].opts.tone === 'error', `pet speaks once (got ${at3.said.length})`)
+const off = await loopPane(0)
+check(!off.html.includes('Possible loop') && off.said.length === 0, 'threshold off hides banner and pet')
+const quiet = await loopPane(3, false)
+check(quiet.html.includes('Possible loop') && quiet.said.length === 0, 'pet toggle off keeps the banner, silences the pet')
 
 if (failures.length) {
   printError('FAIL\n- ' + failures.join('\n- '))

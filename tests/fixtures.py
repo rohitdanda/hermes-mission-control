@@ -42,8 +42,8 @@ def pre_tool_call(call_id="call-1", tool="read_file", turn_id="turn-1", session_
 
 
 def post_tool_call(call_id="call-1", tool="read_file", turn_id="turn-1", status="ok",
-                   duration_ms=42, error_type=None, session_id="sess-1"):
-    return {"tool_name": tool, "args": {"path": "x"}, "result": "{}", "task_id": "task-1",
+                   duration_ms=42, error_type=None, session_id="sess-1", args=None):
+    return {"tool_name": tool, "args": {"path": "x"} if args is None else args, "result": "{}", "task_id": "task-1",
             "session_id": session_id, "tool_call_id": call_id, "turn_id": turn_id,
             "api_request_id": "req-1", "duration_ms": duration_ms, "status": status,
             "error_type": error_type, "error_message": None, "middleware_trace": [],

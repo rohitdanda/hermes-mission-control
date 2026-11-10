@@ -47,7 +47,7 @@ const PLUGIN_ID = 'mission-control'
 const PUSH_EVENT = `plugin.${PLUGIN_ID}.telemetry`
 const ROUTE = '/mission-control'
 
-const DEFAULT_PREFS = { showCost: true, alertToast: true, turnBudgetUsd: 0.5, turnToolBudget: 40, feedSize: 30 }
+const DEFAULT_PREFS = { showCost: true, alertToast: true, turnBudgetUsd: 0.5, turnToolBudget: 40, feedSize: 30, loopThreshold: 5, petAlerts: true }
 const MAX_ROWS = 40
 const WATERFALL_ROWS = 12
 const SEEN_MAX = 2000
@@ -144,7 +144,10 @@ const span = (style, children, extra) => el('span', style, children, extra)
 
 // ---- store --------------------------------------------------------------------
 
-const emptyLive = () => ({ rows: {}, order: [], feed: [], subs: {}, turn: null, spark: [], lastEventAt: 0 })
+const emptyLive = () => ({ rows: {}, order: [], feed: [], subs: {}, turn: null, spark: [], loop: null, lastEventAt: 0 })
+
+// A possible loop worth showing: same tool + same arguments, N times in a row by one agent.
+const loopShown = (loop, prefs) => Boolean(loop && prefs.loopThreshold > 0 && loop.count >= prefs.loopThreshold)
 
 function createStore(ctx) {
   const $prefs = atom({ ...DEFAULT_PREFS, ...ctx.storage.get('prefs', {}) })
@@ -160,7 +163,19 @@ function createStore(ctx) {
   const seen = new Set()
   const seenOrder = []
   const alerted = new Set()
+  const petted = new Set()
 
+  // One pet line per turn+tool, only once the streak reaches the display threshold.
+  const maybePet = loop => {
+    const prefs = $prefs.get()
+    if (!prefs.petAlerts || !loopShown(loop, prefs)) return
+    const key = `${loop.turn_id}|${loop.tool}`
+    if (petted.has(key)) return
+    petted.add(key)
+    try {
+      ctx.pet?.say?.(`🔁 ${loop.tool} ×${loop.count} — possible loop`, { id: 'mc-loop', tone: 'error', ttlMs: 6000 })
+    } catch {}
+  }
   const local = ts => (ts ? ts * 1000 + skewMs : Date.now())
   const syncClock = serverNow => {
     if (serverNow) skewMs = Date.now() - serverNow * 1000
@@ -235,6 +250,12 @@ function createStore(ctx) {
           }
           live.rows[e.id] = row
           live.feed.unshift({ seq: e.seq, kind: 'tool', at, ...row })
+          // Keep the turn's longest identical-call streak (the backend sends the
+          // running count on every tool.end, so any display threshold works).
+          if (e.repeat >= 2 && row.turn_id) {
+            const cur = live.loop && live.loop.turn_id === row.turn_id ? live.loop : null
+            if (!cur || e.repeat >= cur.count) live.loop = { turn_id: row.turn_id, tool: row.tool, count: e.repeat, at }
+          }
           break
         }
         case 'api.done': {
@@ -298,6 +319,7 @@ function createStore(ctx) {
     $live.set(live)
     $now.set(Date.now())
     maybeAlert(live.turn, live)
+    maybePet(live.loop)
     return refresh
   }
 
@@ -340,6 +362,11 @@ function createStore(ctx) {
       const same = live.turn && live.turn.turn_id === top.turn_id
       live.turn = { ...(same ? live.turn : {}), ...top, started_at: local(top.started_at), updated_at: top.ended_at ? local(top.ended_at) : live.turn?.updated_at }
     }
+    // A pane opened mid-loop (or after a reload) still shows the turn's longest streak.
+    if (top && top.loop_max >= 2) {
+      const cur = live.loop && live.loop.turn_id === top.turn_id ? live.loop : null
+      if (!cur || top.loop_max > cur.count) live.loop = { turn_id: top.turn_id, tool: top.loop_tool, count: top.loop_max, at: local(top.ended_at) }
+    }
     live.spark = (snap.spark || []).map(p => ({ ...p }))
     $live.set(live)
   }
@@ -348,6 +375,7 @@ function createStore(ctx) {
     seen.clear()
     seenOrder.length = 0
     alerted.clear()
+    petted.clear()
     cursor = 0
     seeded = false
     $live.set(emptyLive())
@@ -519,6 +547,20 @@ function Header({ store }) {
   ])
 }
 
+function LoopBanner({ store, turn }) {
+  const live = useValue(store.$live)
+  const prefs = useValue(store.$prefs)
+  const loop = live.loop
+  if (!turn || !loop || loop.turn_id !== turn.turn_id || !loopShown(loop, prefs)) return null
+  return jsx(Tip, {
+    label: 'The same tool was called with identical arguments this many times in a row by one agent.',
+    children: div(
+      { padding: '6px 8px', borderRadius: 4, background: tint(C.amber, 16), border: `1px solid ${tint(C.amber, 45)}`, color: C.amber, fontWeight: 600 },
+      `🔁 Possible loop — ${loop.tool} ×${loop.count} with identical arguments`
+    )
+  })
+}
+
 function BurnBanner({ store, turn, ratio }) {
   const now = useValue(store.$now)
   const prefs = useValue(store.$prefs)
@@ -572,6 +614,7 @@ function NowCard({ store }) {
           ], { key: 'budget' })
         : null,
       turn ? jsx(BurnBanner, { key: 'burn', store, turn, ratio }) : null,
+      turn ? jsx(LoopBanner, { key: 'loop', store, turn }) : null,
       jsx(Waterfall, { key: 'wf', store, hint: Boolean(turn) })
     ]
   })
@@ -820,6 +863,17 @@ function SettingsPage({ store }) {
       description: 'How many recent events the Activity card keeps.',
       action: jsx(SegmentedControl, { value: String(prefs.feedSize), options: [{ id: '15', label: '15' }, { id: '30', label: '30' }, { id: '60', label: '60' }], onChange: v => set({ feedSize: Number(v) }) })
     }),
+    jsx(ListRow, {
+      key: 'loop',
+      title: 'Loop alert threshold',
+      description: 'Identical tool calls (same tool, same arguments, one agent) in a row before the possible-loop banner shows.',
+      action: jsx(SegmentedControl, {
+        value: String(prefs.loopThreshold),
+        options: [{ id: '3', label: '3' }, { id: '5', label: '5' }, { id: '10', label: '10' }, { id: '0', label: 'off' }],
+        onChange: v => set({ loopThreshold: Number(v) })
+      })
+    }),
+    jsx(ToggleRow, { key: 'pet', checked: prefs.petAlerts, label: 'Pet speaks up on loops', description: 'A line in the desktop pet’s speech bubble when a possible loop appears (if a pet is on screen).', onChange: on => set({ petAlerts: on }) }),
     jsx(ListRow, { key: 'reset', title: "Reset today's stats", description: 'Clears counters, turns and the feed. Nothing is sent to the agent.', action: jsx(Button, { variant: 'outline', size: 'sm', onClick: () => void store.resetAll(), children: 'Reset' }) })
   ])
 }

@@ -215,6 +215,106 @@ def test_old_store_gains_new_keys_on_reload():
     assert sys.modules[_STATE_KEY]["child_sessions"]["child-sess-1"] == "turn-1"
 
 
+# ---- loop detection ----
+
+def _repeat_calls(agent, n, tool="read_file", args=None, session_id="sess-1", turn_id="T", start=0):
+    for i in range(n):
+        agent.on_post_tool_call(**fx.post_tool_call(call_id=f"{session_id}-{start + i}", tool=tool,
+                                                    turn_id=turn_id, session_id=session_id,
+                                                    args=args if args is not None else {"path": "same.txt"}))
+
+
+def _kinds(api, kind):
+    return [e for e in _run(api.events(since=0))["events"] if e["kind"] == kind]
+
+
+def test_loop_alert_fires_once_per_streak():
+    agent, api = _fresh("loop1")
+    agent.on_post_api_request(**fx.post_api_request(turn_id="T", inp=1))
+    _repeat_calls(agent, 8)
+    alerts = _kinds(api, "loop.alert")
+    assert len(alerts) == 1 and alerts[0]["count"] == 5 and alerts[0]["tool"] == "read_file"
+    assert _run(api.snapshot())["daily"]["loops"] == 1
+    t = _run(api.snapshot())["turns"][0]
+    assert t["loop_max"] == 8 and t["loop_tool"] == "read_file"
+
+
+def test_tool_end_still_recorded_and_carries_repeat():
+    """The non-alerting path must never lose the tool.end event."""
+    agent, api = _fresh("loop2")
+    _repeat_calls(agent, 6)
+    ends = _kinds(api, "tool.end")
+    assert [e["repeat"] for e in ends] == [1, 2, 3, 4, 5, 6]
+    seqs = [(e["kind"], e["seq"]) for e in _run(api.events(since=0))["events"]]
+    end5 = next(s for k, s in seqs if k == "tool.end" and s == ends[4]["seq"])
+    alert = next(s for k, s in seqs if k == "loop.alert")
+    assert alert > end5, "loop.alert is recorded after the tool.end that triggered it"
+
+
+def test_loop_broken_by_different_tool_then_fires():
+    agent, api = _fresh("loop3")
+    _repeat_calls(agent, 4)
+    _repeat_calls(agent, 1, tool="terminal", args={"command": "ls"}, start=10)
+    assert _kinds(api, "loop.alert") == []
+    _repeat_calls(agent, 5, start=20)
+    assert len(_kinds(api, "loop.alert")) == 1
+
+
+def test_same_tool_different_args_is_not_a_loop():
+    agent, api = _fresh("loop4")
+    for i in range(8):
+        agent.on_post_tool_call(**fx.post_tool_call(call_id=f"r{i}", tool="read_file",
+                                                    turn_id="T", args={"path": f"file{i}.md"}))
+    assert _kinds(api, "loop.alert") == []
+    assert all(e["repeat"] == 1 for e in _kinds(api, "tool.end"))
+
+
+def test_interleaved_sessions_do_not_build_a_fake_streak():
+    """Two parallel subagents doing the same thing alternately: each agent's
+    own streak counts, the shared turn never sees a combined 8."""
+    agent, api = _fresh("loop5")
+    for i in range(4):
+        _repeat_calls(agent, 1, session_id="child-a", start=i)
+        _repeat_calls(agent, 1, session_id="child-b", start=i)
+    assert _kinds(api, "loop.alert") == []
+    assert max(e["repeat"] for e in _kinds(api, "tool.end")) == 4
+
+
+def test_loop_rolls_up_to_root_turn():
+    agent, api = _fresh("loop6")
+    agent.on_post_api_request(**fx.post_api_request(turn_id="P", inp=1))
+    agent.on_subagent_start(**fx.subagent_start(child_session_id="kid", parent_turn_id="P"))
+    agent.on_post_api_request(**fx.post_api_request(turn_id="C", session_id="kid", inp=1))
+    _repeat_calls(agent, 5, session_id="kid", turn_id="C")
+    alerts = _kinds(api, "loop.alert")
+    assert len(alerts) == 1 and alerts[0]["turn_id"] == "P"
+    assert _run(api.snapshot())["turns"][0]["loop_max"] == 5
+
+
+def test_blocked_or_cancelled_calls_do_not_count():
+    agent, api = _fresh("loop7")
+    for i in range(6):
+        agent.on_post_tool_call(**fx.post_tool_call(call_id=f"b{i}", status="blocked", turn_id="T"))
+    assert _kinds(api, "loop.alert") == []
+    assert all(e["repeat"] == 0 for e in _kinds(api, "tool.end"))
+
+
+def test_unhashable_args_and_bare_call_fail_open():
+    agent, api = _fresh("loop8")
+    agent.on_post_tool_call()
+    _repeat_calls(agent, 5, args={"obj": object()})        # default=str keeps it hashable
+    assert len(_kinds(api, "loop.alert")) == 1
+
+
+def test_args_are_never_stored():
+    agent, api = _fresh("loop9")
+    _repeat_calls(agent, 5, args={"secret": "hunter2"})
+    import json as _json
+    blob = _json.dumps(_run(api.snapshot()), default=str) + _json.dumps(_run(api.events(since=0)), default=str)
+    blob += repr(sys.modules[_STATE_KEY]["streaks"])
+    assert "hunter2" not in blob
+
+
 # ---- tools ----
 
 def test_zombie_reap():

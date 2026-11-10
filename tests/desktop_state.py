@@ -48,6 +48,9 @@ agent.on_pre_approval_request(**fx.pre_approval_request(turn_id="t1"))
 agent.on_post_approval_response(**fx.post_approval_response(choice="deny", turn_id="t1"))
 agent.on_api_request_error(**fx.api_request_error(turn_id="t1", retryable=True, status_code=529))
 agent.on_pre_tool_call(**fx.pre_tool_call(call_id="c3", tool="web_search", turn_id="t1"))
+for i in range(3):   # a 3x identical-call streak: shown at threshold 3, hidden at the default 5
+    agent.on_post_tool_call(**fx.post_tool_call(call_id=f"g{i}", tool="git_status", turn_id="t1",
+                                                args={"cwd": "."}, duration_ms=60))
 
 out = json.dumps({"snapshot": run(api.snapshot()), "events": run(api.events(since=0))})
 if len(sys.argv) > 1:

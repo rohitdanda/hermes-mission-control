@@ -101,5 +101,7 @@ async def reset():
             s["turns"].clear()
             s["subagents"].clear()
             s["inflight"].clear()
+            if "streaks" in s:
+                s["streaks"].clear()
             _zero_daily(s["daily"])
     return {"ok": True}

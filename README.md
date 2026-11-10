@@ -24,14 +24,16 @@ Requires Hermes **0.21.6** or newer.
 
 | Card | What it shows |
 |---|---|
-| **Now** | Turn state (thinking / running N tools / N subagents working / idle), elapsed time, tokens in and out, estimated cost, and the turn **budget bar** — amber past 80 %, red past 100 % with a pulsing **⚠ High token burn** banner. |
+| **Now** | Turn state (thinking / running N tools / N subagents working / idle), elapsed time, tokens in and out, estimated cost, and the turn **budget bar** — amber past 80 %, red past 100 % with a pulsing **⚠ High token burn** banner. A **🔁 Possible loop** banner appears when one agent calls the same tool with identical arguments several times in a row (3, 5 or 10 — your choice). |
 | **Tool waterfall** | Every tool call as a bar on one timeline. Running calls pulse and grow with a live stopwatch; finished calls snap to green ✓, red ✕ (hover for the error type) or grey ⊘ (cancelled/blocked). The last run stays on screen until the next one. |
 | **Subagents** | One card per delegated subagent, ticking while it runs — parallel subagents tick side by side. Click a finished card for its summary. |
 | **Today** | Turns, tokens, tool calls, errors (with retried model calls on hover), approvals and denials, estimated cost, the **⚡ cached** badge with cache hit rate, and a sparkline of the last 12 turns. |
 | **Activity** | A feed of tool calls, failed or retried model calls, subagents and approval decisions. |
 | **Status-bar chip** | Spinner while the agent works, plus today's tokens and cost; turns amber or red when the current turn is over budget. Click it to open the full page. |
 
-When a turn crosses a budget you get **one** in-app toast for that turn (plus an OS notification if Hermes is in the background). The watchdog only alerts — it never stops or changes the agent.
+When a turn crosses a budget you get **one** in-app toast for that turn (plus an OS notification if Hermes is in the background). If you have a desktop pet, it speaks up once when a possible loop appears. Both only alert — they never stop or change the agent.
+
+**What counts as a loop.** Same tool **and** identical arguments, called back to back by **one** agent. Reading five different files is normal work and never trips it; parallel subagents each keep their own count, so interleaved work can't add up to a false alarm. A loop inside a subagent is reported on the turn that delegated it.
 
 ## How it works
 
@@ -74,6 +76,8 @@ Costs are labelled **est.** on purpose. They come from a bundled per-1M-token pr
 | Turn cost budget | $0.50 | Per-turn estimated cost that turns the bar red. `0` = off. |
 | Turn tool-call budget | 40 | Tool calls in one turn before the bar turns red. `0` = off. |
 | Activity feed size | 30 | 15, 30 or 60 events. |
+| Loop alert threshold | 5 | Identical calls in a row before the 🔁 banner: 3, 5, 10 or off. |
+| Pet speaks up on loops | on | One line in the desktop pet's bubble when a possible loop appears. |
 | Reset today's stats | | Clears counters, turns and the feed. |
 
 ## Troubleshooting
@@ -94,7 +98,7 @@ In-process only: reads observer-hook telemetry and serves it over Hermes's own p
 
 In detail:
 
-- **Reads:** only the hook payloads Hermes passes to it. It does not record tool arguments, tool results, prompts or replies — only tool names, statuses, durations, error types, token counts, model and provider names, subagent goals and summaries (truncated), and approval decisions.
+- **Reads:** only the hook payloads Hermes passes to it. It does not record tool arguments, tool results, prompts or replies — only tool names, statuses, durations, error types, token counts, model and provider names, subagent goals and summaries (truncated), and approval decisions. To spot repeated calls it keeps a short, irreversible hash of each agent's most recent tool arguments, in memory only.
 - **Writes:** nothing to disk. Telemetry lives in process memory; your settings live in the Desktop's own plugin storage.
 - **Network:** none of its own. Events reach the Desktop through Hermes's local plugin API and event bridge.
 - **Agent:** never written to. No tools, no middleware, no approval answers.
@@ -102,7 +106,7 @@ In detail:
 ## Development
 
 ```bash
-python tests/test_store.py        # store, rollup, pricing, routes, hook parity (stdlib only)
+python tests/test_store.py        # store, rollup, loops, pricing, routes, hook parity (stdlib only)
 python tests/test_push.py         # the Desktop push bridge
 python tests/e2e_http.py          # mounts the routes on Hermes's real web server (Hermes venv)
 python tests/desktop_state.py state.json
