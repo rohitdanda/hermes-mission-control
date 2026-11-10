@@ -1,6 +1,6 @@
 name: mission-control
 version: 1.0.0
-description: Live mission-control dashboard for Hermes Desktop — pulsing tool waterfall, subagent cards, approvals, token/cost meters and a runaway-burn watchdog, streamed in real time.
+description: Live mission-control dashboard for Hermes Desktop — tool waterfall, parallel subagent cards, token and estimated-cost meters with a prompt-cache badge, plus budget and possible-loop alerts, streamed in real time. Read-only; nothing leaves the machine.
 author: rohitkumardanda
 license: MIT
 requires_hermes: ">=0.21.6"
