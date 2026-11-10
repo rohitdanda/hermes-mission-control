@@ -195,6 +195,32 @@ check(!off.html.includes('Possible loop') && off.said.length === 0, 'threshold o
 const quiet = await loopPane(3, false)
 check(quiet.html.includes('Possible loop') && quiet.said.length === 0, 'pet toggle off keeps the banner, silences the pet')
 
+// Unpriced model + tool budget hit (the copilot / claude-haiku-5.5 case): no "— —", no "$0".
+{
+  const snap = JSON.parse(JSON.stringify(state.snapshot))
+  Object.assign(snap.turns[0], { priced: false, est_cost: 0, model: 'claude-haiku-5.5', provider: 'copilot' })
+  Object.assign(snap.daily, { est_cost: 0, unpriced_calls: 3 })
+  snap.events = snap.events.filter(e => e.kind !== 'api.done')   // they carry the priced totals
+  snap.spark = []
+  const got = []
+  const toasts = notifications.length
+  plugin.register({
+    ...ctx,
+    storage: { get: (k, d) => (k === 'prefs' ? { turnToolBudget: 3 } : d), set: () => {}, remove: () => {} },
+    rest: async p => (p.startsWith('/snapshot') ? snap : { events: [], max_seq: snap.max_seq, now: snap.now }),
+    registerMany: cs => got.push(...cs),
+    registerSettingsPage: () => {},
+    onEvent: () => () => {}
+  })
+  await new Promise(r => setTimeout(r, 20))
+  const html = renderToString(got.find(x => x.id === 'pane').render())
+  const chipHtml = renderToString(got.find(x => x.id === 'chip').render())
+  check(html.includes('Tool budget hit — 6 tool calls this turn (budget 3)'), 'tool-only breach is named as such')
+  check(!html.includes('— —') && !html.includes('High token burn'), 'no "— —" and no token-burn claim without a known cost')
+  check(!/>\$0</.test(html) && !chipHtml.includes('$0'), 'unpriced day never shows $0')
+  check(notifications.slice(toasts).some(n => /tool budget/.test(n.title)), 'toast names the tool budget')
+}
+
 if (failures.length) {
   printError('FAIL\n- ' + failures.join('\n- '))
   process.exit(1)

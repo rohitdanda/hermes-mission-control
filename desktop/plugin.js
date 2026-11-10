@@ -78,6 +78,9 @@ const fmtTurnCost = turn => {
   return fmtUsd(turn.est_cost || 0)
 }
 
+// Today's cost: all calls unpriced → "—", some → "≥$x", never a misleading "$0".
+const dailyCost = d => (d.unpriced_calls ? (d.est_cost > 0 ? `≥${fmtUsd(d.est_cost)}` : '—') : fmtUsd(d.est_cost))
+
 const num = v => compactNumber(Number(v) || 0)
 const prompt = t => (t ? (t.tokens_prompt ?? (t.tokens_in || 0) + (t.cache_read || 0) + (t.cache_write || 0)) : 0)
 
@@ -205,12 +208,12 @@ function createStore(ctx) {
     if (!turn || !prefs.alertToast || alerted.has(turn.turn_id)) return
     if (turnRatio(turn, live, prefs) < 1) return
     alerted.add(turn.turn_id)
-    const message = `This turn is at ${fmtTurnCost(turn)} and ${turn.tool_calls || 0} tool calls — over your budget.`
+    const b = breach(turn, live, prefs)
     try {
-      host.notify({ kind: 'warning', title: 'Mission Control: high token burn', message })
+      host.notify({ kind: 'warning', title: `Mission Control: ${b.title}`, message: b.text })
     } catch {}
     try {
-      ctx.os?.notify?.({ title: 'Hermes: high token burn', body: message, activate: ROUTE })
+      ctx.os?.notify?.({ title: `Hermes: ${b.title}`, body: b.text, activate: ROUTE })
     } catch {}
   }
 
@@ -564,12 +567,27 @@ function LoopBanner({ store, turn }) {
 function BurnBanner({ store, turn, ratio }) {
   const now = useValue(store.$now)
   const prefs = useValue(store.$prefs)
+  const live = useValue(store.$live)
   if (ratio < 1) return null
   const pulse = 0.65 + 0.35 * Math.abs(Math.sin(now / 350))
   return div(
     { padding: '6px 8px', borderRadius: 4, background: tint(C.red, 16), border: `1px solid ${tint(C.red, 45)}`, color: C.red, fontWeight: 600, opacity: pulse },
-    `⚠ High token burn — ${prefs.showCost ? fmtTurnCost(turn) + ' · ' : ''}${turn.tool_calls || 0} tool calls this turn`
+    `⚠ ${breach(turn, live, prefs).text}`
   )
+}
+
+// Which budget a turn crossed, in words. Cost is only named when it is known
+// and shown, so an unpriced model never prints "— —".
+function breach(turn, live, prefs) {
+  const tools = Math.max(turn?.tool_calls || 0, live ? countTurnTools(live, turn?.turn_id) : 0)
+  const costKnown = prefs.showCost && turn?.priced !== false && (turn?.est_cost || 0) > 0
+  const overCost = costKnown && prefs.turnBudgetUsd > 0 && turn.est_cost >= prefs.turnBudgetUsd
+  const overTools = prefs.turnToolBudget > 0 && tools >= prefs.turnToolBudget
+  const toolsText = `${tools} tool call${tools === 1 ? '' : 's'} this turn (budget ${prefs.turnToolBudget})`
+  if (overCost && overTools) return { title: 'high token burn', text: `High token burn — ${fmtTurnCost(turn)} and ${tools} tool calls this turn` }
+  if (overCost) return { title: 'high token burn', text: `High token burn — ${fmtTurnCost(turn)} this turn (budget ${fmtUsd(prefs.turnBudgetUsd)})` }
+  if (overTools) return { title: 'tool budget hit', text: `Tool budget hit — ${toolsText}` }
+  return { title: 'over budget', text: `Over budget — ${tools} tool calls this turn` }
 }
 
 function NowCard({ store }) {
@@ -750,7 +768,8 @@ function Today({ store }) {
     jsx(Stat, { key: 'appr', label: 'approvals', value: d.approvals_denied ? `${d.approvals} (${d.approvals_denied}✕)` : String(d.approvals), hint: d.approvals_unanswered ? `${d.approvals_unanswered} timed out or cancelled` : undefined })
   ]
   if (prefs.showCost) {
-    cells.push(jsx(Stat, { key: 'cost', label: 'est. cost', value: fmtUsd(d.est_cost), hint: d.unpriced_calls ? `${d.unpriced_calls} calls on models without a price` : costHint(provider) }))
+    // All calls unpriced → "—", some unpriced → "≥$x", never a misleading "$0".
+    cells.push(jsx(Stat, { key: 'cost', label: 'est. cost', value: dailyCost(d), hint: d.unpriced_calls ? `${d.unpriced_calls} calls on models without a price` : costHint(provider) }))
   }
   return Card({
     title: 'Today',
@@ -810,9 +829,9 @@ function Chip({ store }) {
   const ratio = store.turnRatio(live.turn, live, prefs)
   const color = ratio >= 1 ? C.red : ratio >= 0.8 ? C.amber : C.text3
   const tokens = d ? prompt(d) + (d.tokens_out || 0) : 0
-  const label = d ? `${num(tokens)}${prefs.showCost ? ' · ' + fmtUsd(d.est_cost) : ''}` : 'MC'
+  const label = d ? `${num(tokens)}${prefs.showCost ? ' · ' + dailyCost(d) : ''}` : 'MC'
   return jsx(Tip, {
-    label: d ? `Mission Control — today: ${d.turns} turns, ${d.tool_calls} tool calls, ${num(tokens)} tokens${prefs.showCost ? ', ' + fmtUsd(d.est_cost) + ' est.' : ''}` : 'Mission Control',
+    label: d ? `Mission Control — today: ${d.turns} turns, ${d.tool_calls} tool calls, ${num(tokens)} tokens${prefs.showCost ? ', ' + dailyCost(d) + ' est.' : ''}` : 'Mission Control',
     children: jsxs('button', {
       type: 'button',
       onClick: () => host.navigate(ROUTE),
